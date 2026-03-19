@@ -247,11 +247,6 @@ class RobotSSHGUI:
         else:
             dpg.configure_item("camera_toggle_btn", label="Start Camera")
 
-
-
-
-
-
     def execute_command(self, command, timeout=10, get_pty=False):
         """Execute SSH command and return output"""
         if not self.connected or not self.ssh_client:
@@ -380,6 +375,34 @@ class RobotSSHGUI:
                 print(f"✗✗✗ Battery monitoring error: {e}")
                 time.sleep(10)
     
+    def start_scan_service(self):
+        """Start the scan motor service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl start run_scan_mtr.service")
+            if stderr:
+                print(f"Start service error: {stderr}")
+            else:
+                print("Scan motor service started")
+        except Exception as e:
+            print(f"Error starting service: {e}")
+
+    def stop_scan_service(self):
+        """Stop the scan motor service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl stop run_scan_mtr.service")
+            if stderr:
+                print(f"Stop service error: {stderr}")
+            else:
+                print("Scan motor service stopped")
+        except Exception as e:
+            print(f"Error stopping service: {e}")
+
     def monitor_status(self):
         """Background thread to monitor robot status"""
         while self.running and self.connected:
@@ -411,7 +434,7 @@ class RobotSSHGUI:
                     dpg.set_value("disk_usage", f"Disk: {self.robot_status['disk_usage']:.1f}%")
                 
                 # Add battery to history
-                if self.robot_status["battery"] > 0:  # NEW
+                if self.robot_status["battery"] > 0:
                     self.battery_history.append(self.robot_status["battery"])
                 
                 # Update time points
@@ -629,6 +652,14 @@ class RobotSSHGUI:
                     # Quick actions
                     dpg.add_text("Quick Actions", color=(100, 200, 255))
                     dpg.add_separator()
+
+                    dpg.add_button(label="Start Scan Motor",
+                                   callback=lambda: self.start_scan_service(),
+                                   width=-1)
+
+                    dpg.add_button(label="Stop Scan Motor",
+                                   callback=lambda: self.stop_scan_service(),
+                                   width=-1)
 
                     dpg.add_button(label="List Home Directory", 
                                  callback=lambda: self.command_queue.put("ls -la ~/"),
