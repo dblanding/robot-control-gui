@@ -20,6 +20,13 @@ class RobotSSHGUI:
         
         self.ssh_client = None
         self.connected = False
+
+        # To implement the "rolling window" plots
+        self.time_data = []
+        self.cpu_data = []
+        self.mem_data = []
+        self.temp_data = []
+        
         self.command_queue = queue.Queue()
         self.response_queue = queue.Queue()
         
@@ -426,7 +433,55 @@ class RobotSSHGUI:
             except Exception as e:
                 print(f"Status monitoring error: {e}")
                 time.sleep(2)
-    
+    '''
+    def monitor_status(self):
+        """Background thread to monitor system stats"""
+        import time
+        
+        max_points = 100  # Keep only last 100 data points (rolling window)
+        
+        while self.running and self.connected:
+            try:
+                # Get system stats
+                stdout, _ = self.execute_command("top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1")
+                cpu = float(stdout.strip())
+                
+                stdout, _ = self.execute_command("free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100.0}'")
+                mem = float(stdout.strip())
+                
+                stdout, _ = self.execute_command("vcgencmd measure_temp | cut -d'=' -f2 | cut -d\"'\" -f1")
+                temp = float(stdout.strip())
+                
+                # Append new data
+                self.time_data.append(time.time())
+                self.cpu_data.append(cpu)
+                self.mem_data.append(mem)
+                self.temp_data.append(temp)
+                
+                # Keep only last max_points (rolling window)
+                if len(self.time_data) > max_points:
+                    self.time_data = self.time_data[-max_points:]
+                    self.cpu_data = self.cpu_data[-max_points:]
+                    self.mem_data = self.mem_data[-max_points:]
+                    self.temp_data = self.temp_data[-max_points:]
+                
+                # Update plots
+                dpg.set_value("cpu_series", [self.time_data, self.cpu_data])
+                dpg.set_value("mem_series", [self.time_data, self.mem_data])
+                dpg.set_value("temp_series", [self.time_data, self.temp_data])
+                
+                # Auto-fit x-axis to show rolling window
+                if len(self.time_data) > 1:
+                    dpg.fit_axis_data("cpu_x_axis")
+                    dpg.fit_axis_data("mem_x_axis")
+                    dpg.fit_axis_data("temp_x_axis")
+                
+                time.sleep(2)
+                
+            except Exception as e:
+                print(f"System monitoring error: {e}")
+                time.sleep(2)
+    '''
     def process_commands(self):
         """Background thread to process command queue"""
         while self.running and self.connected:
