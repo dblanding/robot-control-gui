@@ -10,7 +10,6 @@ import os
 
 class RobotSSHGUI:
     def __init__(self, host="raspibot.local", port=22, username="doug", password="robot"):
-        self.hostname = "raspibot.local"  # Raspibot's hostname
         self.host = host
         self.port = port
         self.username = username
@@ -185,7 +184,7 @@ class RobotSSHGUI:
         sock.settimeout(10)
         
         try:
-            sock.connect((self.hostname, 8080))
+            sock.connect((self.host, 8080))
             print("Connected to camera stream")
         except Exception as e:
             print(f"Failed to connect to camera stream: {e}")
@@ -203,7 +202,7 @@ class RobotSSHGUI:
                     time.sleep(1)
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     sock.settimeout(10)
-                    sock.connect((self.hostname, 8080))
+                    sock.connect((self.host, 8080))
                     bytes_data = bytes()
                     continue
                 
@@ -375,8 +374,8 @@ class RobotSSHGUI:
                 print(f"✗✗✗ Battery monitoring error: {e}")
                 time.sleep(10)
     
-    def start_scan_service(self):
-        """Start the scan motor service"""
+    def start_scan_motor(self):
+        """Start the scan motor"""
         if not self.connected:
             return
         
@@ -389,8 +388,8 @@ class RobotSSHGUI:
         except Exception as e:
             print(f"Error starting service: {e}")
 
-    def stop_scan_service(self):
-        """Stop the scan motor service"""
+    def stop_scan_motor(self):
+        """Stop the scan motor"""
         if not self.connected:
             return
         
@@ -432,11 +431,7 @@ class RobotSSHGUI:
                 if output:
                     self.robot_status["disk_usage"] = float(output)
                     dpg.set_value("disk_usage", f"Disk: {self.robot_status['disk_usage']:.1f}%")
-                
-                # Add battery to history
-                if self.robot_status["battery"] > 0:
-                    self.battery_history.append(self.robot_status["battery"])
-                
+
                 # Update time points
                 self.time_points.append(self.time_counter)
                 self.time_counter += 1
@@ -513,8 +508,6 @@ class RobotSSHGUI:
             dpg.set_value("cpu_series", [list(self.time_points), list(self.cpu_history)])
         if len(self.memory_history) > 0:
             dpg.set_value("memory_series", [list(self.time_points), list(self.memory_history)])
-        if len(self.battery_history) > 0:
-            dpg.set_value("battery_series", [list(self.time_points), list(self.battery_history)])
     
     def create_gui(self):
         """Create the GUI layout"""
@@ -654,11 +647,11 @@ class RobotSSHGUI:
                     dpg.add_separator()
 
                     dpg.add_button(label="Start Scan Motor",
-                                   callback=lambda: self.start_scan_service(),
+                                   callback=lambda: self.start_scan_motor(),
                                    width=-1)
 
                     dpg.add_button(label="Stop Scan Motor",
-                                   callback=lambda: self.stop_scan_service(),
+                                   callback=lambda: self.stop_scan_motor(),
                                    width=-1)
 
                     dpg.add_button(label="List Home Directory", 
@@ -698,14 +691,6 @@ class RobotSSHGUI:
 
                     dpg.add_separator()
 
-                    # Battery level plot
-                    with dpg.plot(label="Battery Level", height=250, width=-1):
-                        dpg.add_plot_legend()
-                        dpg.add_plot_axis(dpg.mvXAxis, label="Time", tag="battery_x_axis")
-                        dpg.add_plot_axis(dpg.mvYAxis, label="Battery %", tag="battery_y_axis")
-                        dpg.add_line_series([], [], label="Battery Level", tag="battery_series", parent="battery_y_axis")
-                        dpg.set_axis_limits("battery_y_axis", 0, 100)
-                
                 # Right panel - Command log and file browser
                 with dpg.child_window(width=-1, height=-1):
                     dpg.add_text("Command Log & Output", color=(100, 200, 255))
