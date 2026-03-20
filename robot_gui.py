@@ -2,7 +2,7 @@ import dearpygui.dearpygui as dpg
 import paramiko
 import threading
 import time
-import json
+# import json
 from collections import deque
 import queue
 import numpy as np
@@ -38,10 +38,9 @@ class RobotSSHGUI:
         }
 
         # Telemetry history
-        self.cpu_history = deque(maxlen=100)
-        self.memory_history = deque(maxlen=100)
-        self.battery_history = deque(maxlen=100)
-        self.time_points = deque(maxlen=100)
+        self.cpu_history = []
+        self.memory_history = []
+        self.time_points = []
         self.time_counter = 0
         
         # Command log
@@ -171,7 +170,6 @@ class RobotSSHGUI:
 
     def monitor_camera(self):
         """Background thread to update camera feed from TCP MJPEG stream"""
-        import numpy as np
         from PIL import Image
         from io import BytesIO
         import socket
@@ -384,7 +382,7 @@ class RobotSSHGUI:
             if stderr:
                 print(f"Start service error: {stderr}")
             else:
-                print("Scan motor service started")
+                print("Scan motor started")
         except Exception as e:
             print(f"Error starting service: {e}")
 
@@ -398,7 +396,7 @@ class RobotSSHGUI:
             if stderr:
                 print(f"Stop service error: {stderr}")
             else:
-                print("Scan motor service stopped")
+                print("Scan motor stopped")
         except Exception as e:
             print(f"Error stopping service: {e}")
 
@@ -418,6 +416,8 @@ class RobotSSHGUI:
                     self.robot_status["cpu_usage"] = float(output)
                     dpg.set_value("cpu_usage", f"CPU Usage: {self.robot_status['cpu_usage']:.1f}%")
                     self.cpu_history.append(self.robot_status["cpu_usage"])
+                    if len(self.cpu_history) > 60:
+                        self.cpu_history.pop(0)
                 
                 # Get memory usage
                 output, _ = self.execute_command("free | grep Mem | awk '{print ($3/$2) * 100.0}'")
@@ -425,6 +425,8 @@ class RobotSSHGUI:
                     self.robot_status["memory_usage"] = float(output)
                     dpg.set_value("memory_usage", f"Memory: {self.robot_status['memory_usage']:.1f}%")
                     self.memory_history.append(self.robot_status["memory_usage"])
+                    if len(self.memory_history) > 60:
+                        self.memory_history.pop(0)
                 
                 # Get disk usage
                 output, _ = self.execute_command("df -h / | tail -1 | awk '{print $5}' | cut -d'%' -f1")
@@ -435,11 +437,17 @@ class RobotSSHGUI:
                 # Update time points
                 self.time_points.append(self.time_counter)
                 self.time_counter += 1
+                if len(self.time_points) > 60:
+                        self.time_points.pop(0)
+
+                # keep time points between 0 and 59
+                for i in range(len(self.time_points)):
+                    self.time_points[i] = i
                 
                 # Update plots
                 self.update_plots()
                 
-                time.sleep(2)  # Update every 2 seconds
+                time.sleep(1)  # Update once per second
                 
             except Exception as e:
                 print(f"Status monitoring error: {e}")
@@ -505,9 +513,15 @@ class RobotSSHGUI:
     def update_plots(self):
         """Update telemetry plots"""
         if len(self.cpu_history) > 0:
-            dpg.set_value("cpu_series", [list(self.time_points), list(self.cpu_history)])
+            dpg.set_value(self.cpu_series_tag, [self.time_points, self.cpu_history])
         if len(self.memory_history) > 0:
-            dpg.set_value("memory_series", [list(self.time_points), list(self.memory_history)])
+            dpg.set_value(self.mem_series_tag, [self.time_points, self.memory_history])
+
+        # Force plot refresh
+        dpg.fit_axis_data("cpu_x_axis")
+        dpg.fit_axis_data("cpu_y_axis")
+        dpg.fit_axis_data("mem_x_axis")
+        dpg.fit_axis_data("mem_y_axis")
     
     def create_gui(self):
         """Create the GUI layout"""
@@ -671,24 +685,22 @@ class RobotSSHGUI:
                     dpg.add_text("System Telemetry", color=(100, 200, 255))
                     dpg.add_separator()
                     
-                    # CPU usage plot
-                    with dpg.plot(label="CPU Usage", height=300, width=-1):
+                    # CPU plot
+                    with dpg.plot(label="CPU Usage", height=250, width=-1):
                         dpg.add_plot_legend()
-                        dpg.add_plot_axis(dpg.mvXAxis, label="Time")
+                        dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="cpu_x_axis")
                         dpg.add_plot_axis(dpg.mvYAxis, label="CPU %", tag="cpu_y_axis")
-                        dpg.add_line_series([], [], label="CPU Usage", tag="cpu_series", parent="cpu_y_axis")
-                        dpg.set_axis_limits("cpu_y_axis", 0, 100)
+                        self.cpu_series_tag = dpg.add_line_series(self.time_points, self.cpu_history,
+                                                                  label="CPU", parent="cpu_y_axis")
                     
-                    dpg.add_separator()
-                    
-                    # Memory usage plot
-                    with dpg.plot(label="Memory Usage", height=300, width=-1):
+                    # Memory plot
+                    with dpg.plot(label="Memory Usage", height=250, width=-1):
                         dpg.add_plot_legend()
-                        dpg.add_plot_axis(dpg.mvXAxis, label="Time")
+                        dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="mem_x_axis")
                         dpg.add_plot_axis(dpg.mvYAxis, label="Memory %", tag="mem_y_axis")
-                        dpg.add_line_series([], [], label="Memory Usage", tag="memory_series", parent="mem_y_axis")
-                        dpg.set_axis_limits("mem_y_axis", 0, 100)
-
+                        self.mem_series_tag = dpg.add_line_series(self.time_points, self.memory_history,
+                                                                  label="Memory", parent="mem_y_axis")
+                    
                     dpg.add_separator()
 
                 # Right panel - Command log and file browser
