@@ -266,26 +266,6 @@ class RobotSSHGUI:
                 print(f"Command execution exception: {e}")
                 return None, str(e)
 
-    def test_battery_direct(self):
-        """Test battery monitor directly and show output"""
-        self.log_command("=== Testing Battery Monitor ===")
-        
-        # Use the command that works
-        command = "cd ~ && python UPS/INA219.py"
-        self.log_command(f"Executing: {command}")
-        
-        output, error = self.execute_command(command, timeout=15)
-        
-        if output:
-            self.log_command(f"✓ SUCCESS! Raw output:\n{output}")
-            self.log_command(f"\nOutput length: {len(output)} characters")
-            self.log_command(f"Number of lines: {len(output.split(chr(10)))}")
-        else:
-            self.log_command("✗ No output received")
-        
-        if error:
-            self.log_command(f"✗ Error output:\n{error}")
-
     def monitor_battery(self):
         """Background thread to monitor battery status"""
         time.sleep(3)
@@ -372,6 +352,20 @@ class RobotSSHGUI:
                 print(f"✗✗✗ Battery monitoring error: {e}")
                 time.sleep(10)
     
+    def restart_scanner_service(self):
+        """Restart scanner service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl restart scanner.service")
+            if stderr:
+                print(f"Restart service error: {stderr}")
+            else:
+                print("Scanner service restarted")
+        except Exception as e:
+            print(f"Error restarting service: {e}")
+
     def start_scan_motor(self):
         """Start the scan motor"""
         if not self.connected:
@@ -397,6 +391,34 @@ class RobotSSHGUI:
                 print(f"Stop service error: {stderr}")
             else:
                 print("Scan motor stopped")
+        except Exception as e:
+            print(f"Error stopping service: {e}")
+
+    def start_odometer_service(self):
+        """Start odometer service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl start odometer.service")
+            if stderr:
+                print(f"Start service error: {stderr}")
+            else:
+                print("Odometer service started")
+        except Exception as e:
+            print(f"Error starting service: {e}")
+
+    def stop_odometer_service(self):
+        """Stop odometer service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl stop odometer.service")
+            if stderr:
+                print(f"Stop service error: {stderr}")
+            else:
+                print("Odometer service stopped")
         except Exception as e:
             print(f"Error stopping service: {e}")
 
@@ -660,12 +682,24 @@ class RobotSSHGUI:
                     dpg.add_text("Quick Actions", color=(100, 200, 255))
                     dpg.add_separator()
 
+                    dpg.add_button(label="Restart Scanner Service",
+                                   callback=lambda: self.restart_scanner_service(),
+                                   width=-1)
+
                     dpg.add_button(label="Start Scan Motor",
                                    callback=lambda: self.start_scan_motor(),
                                    width=-1)
 
                     dpg.add_button(label="Stop Scan Motor",
                                    callback=lambda: self.stop_scan_motor(),
+                                   width=-1)
+
+                    dpg.add_button(label="Start Odometer Service",
+                                   callback=lambda: self.start_odometer_service(),
+                                   width=-1)
+
+                    dpg.add_button(label="Stop Odometer Service",
+                                   callback=lambda: self.stop_odometer_service(),
                                    width=-1)
 
                     dpg.add_button(label="List Home Directory", 
