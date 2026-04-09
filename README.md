@@ -1,4 +1,7 @@
-# Installation instructions
+# Robot Control GUI
+![Screenshot of Robot Control GUI](imgs/Screenshot.png)
+
+## Installation instructions
 1. On laptop: *robot_gui.py*
 ```
 uv add dearpygi
@@ -10,8 +13,8 @@ uv add paramiko
 sudo systemctl enable ssh
 sudo systemctl start ssh
 
-# Place robot_control.py in /home/doug/
-chmod +x /home/doug/robot_control.py
+# Place robot_control.py in ~
+chmod +x ~/robot_control.py
 ```
 3. Optional - Create a systemd service for your robot:
 ```

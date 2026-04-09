@@ -1,8 +1,10 @@
+# robot_gui.py
+# Run this on you laptop
 import dearpygui.dearpygui as dpg
 import paramiko
+import subprocess
 import threading
 import time
-# import json
 from collections import deque
 import queue
 import numpy as np
@@ -57,7 +59,10 @@ class RobotSSHGUI:
         self.camera_width = 640
         self.camera_height = 480
         self.camera_thread = None
-        
+
+        # Process handles
+        self.display_scan_ph = None
+
     def setup_ssh_connection(self):
         """Establish SSH connection"""
         try:
@@ -422,6 +427,30 @@ class RobotSSHGUI:
         except Exception as e:
             print(f"Error stopping service: {e}")
 
+    def start_display_scan(self):
+        """Start Display Scan Program locally (not on robot)"""
+        try:
+            if self.display_scan_ph is None or self.display_scan_ph.poll() is not None:
+                # Launch program in the background
+                self.display_scan_ph = subprocess.Popen(["uv", "run", "display_scans.py"])
+                print(f"Display scan program started with PID: {self.display_scan_ph.pid}")
+            else:
+                print("Unable to start display scan program")
+        except Exception as e:
+            print(f"Error starting display scan program: {e}")
+
+    def stop_display_scan(self):
+        """Stop Display Scan Program locally (not on robot)"""
+        try:
+            if self.display_scan_ph:
+                self.display_scan_ph.terminate()  # Graceful termination
+                self.display_scan_ph = None
+                print(f"Display Scan Program stopped")
+            else:
+                print("Unable to stop display scan program")
+        except Exception as e:
+            print(f"Error stopping display scan program: {e}")
+
     def monitor_status(self):
         """Background thread to monitor robot status"""
         while self.running and self.connected:
@@ -700,6 +729,14 @@ class RobotSSHGUI:
 
                     dpg.add_button(label="Stop Odometer Service",
                                    callback=lambda: self.stop_odometer_service(),
+                                   width=-1)
+
+                    dpg.add_button(label="Start Display Scan",
+                                   callback=lambda: self.start_display_scan(),
+                                   width=-1)
+
+                    dpg.add_button(label="Stop Display Scan",
+                                   callback=lambda: self.stop_display_scan(),
                                    width=-1)
 
                     dpg.add_button(label="List Home Directory", 
