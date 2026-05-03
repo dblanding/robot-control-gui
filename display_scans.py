@@ -7,6 +7,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
+lidar_topic = "robot/sensor/lidar/scan"
 debug = False
 
 class MQTTSubscriber:
@@ -43,7 +44,7 @@ class MQTTSubscriber:
 
 async def main():
     broker_address = "192.168.1.85"
-    mqtt_topics = ["lidar/data"]
+    mqtt_topics = [lidar_topic]
     
     subscriber = MQTTSubscriber(broker_address, 1883, mqtt_topics)
     last_scan = None
@@ -56,7 +57,7 @@ async def main():
         await asyncio.sleep(0.1)
         current_messages = subscriber.get_latest_messages()
         for topic, message in current_messages.items():
-            if topic == "lidar/data":
+            if topic == lidar_topic:
                 if message:
                     scan = json.loads(message)
                     if scan != last_scan:  # Check if the scan is new
