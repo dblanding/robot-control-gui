@@ -9,6 +9,12 @@ from collections import deque
 import queue
 import numpy as np
 import os
+import paho.mqtt.client as mqtt
+from collections import deque
+import math
+import sys
+sys.path.insert(0, '../raspibot/robot')  # Adjust path to where topics.py is
+from topics import Topics
 
 class RobotSSHGUI:
     def __init__(self, host="raspibot.local", port=22, username="doug", password="robot"):
@@ -63,6 +69,17 @@ class RobotSSHGUI:
         # Process handles
         self.display_scan_ph = None
 
+        # Odometry visualization
+        self.odom_path_x = deque(maxlen=500)  # Store last 500 points
+        self.odom_path_y = deque(maxlen=500)
+        self.current_x = 0.0
+        self.current_y = 0.0
+        self.current_heading = 0.0
+         
+        # MQTT client for odometry subscription (separate from SSH)
+        self.mqtt_client = None
+        self.mqtt_connected = False
+
     def setup_ssh_connection(self):
         """Establish SSH connection"""
         try:
@@ -102,6 +119,7 @@ class RobotSSHGUI:
             self.status_thread.start()
             self.command_thread.start()
             self.battery_thread.start()
+            self.setup_mqtt_subscriber()
             
             return True
             
@@ -123,6 +141,7 @@ class RobotSSHGUI:
     def disconnect_ssh(self):
         """Disconnect SSH connection"""
         self.running = False
+        self.disconnect_mqtt()
         if self.ssh_client:
             self.ssh_client.close()
             self.connected = False
@@ -131,6 +150,81 @@ class RobotSSHGUI:
             dpg.set_value("connection_status", "Status: Disconnected")
             dpg.configure_item("connection_status", color=(255, 0, 0))
     
+    def setup_mqtt_subscriber(self):
+        """Connect to MQTT broker on robot to subscribe to odometry"""
+        try:
+            self.mqtt_client = mqtt.Client()
+            self.mqtt_client.username_pw_set("robot", "robot")
+            self.mqtt_client.on_connect = self.on_mqtt_connect
+            self.mqtt_client.on_message = self.on_mqtt_message
+            
+            # Connect to robot's MQTT broker
+            self.mqtt_client.connect(self.host, 1883, 60)
+            self.mqtt_client.loop_start()
+            
+            self.mqtt_connected = True
+            self.log_command("✓ Connected to MQTT broker for odometry")
+            
+        except Exception as e:
+            self.log_command(f"✗ MQTT connection failed: {e}")
+            self.mqtt_connected = False
+
+    def on_mqtt_connect(self, client, userdata, flags, rc):
+        """Callback when MQTT connects"""
+        if rc == 0:
+            # Subscribe to odometry topic
+            client.subscribe(Topics.ODOM_POSE)
+            self.log_command(f"✓ Subscribed to {Topics.ODOM_POSE}")
+        else:
+            self.log_command(f"✗ MQTT connection failed with code {rc}")
+
+    def on_mqtt_message(self, client, userdata, msg):
+        """Callback when MQTT message received"""
+        try:
+            import json
+            if msg.topic == Topics.ODOM_POSE:
+                data = json.loads(msg.payload.decode())
+                
+                # Update current position
+                self.current_x = data['x']
+                self.current_y = data['y']
+                self.current_heading = data['h']
+                
+                # Add to path history
+                self.odom_path_x.append(self.current_x)
+                self.odom_path_y.append(self.current_y)
+                
+                # Update robot status dict
+                self.robot_status["position"] = {
+                    "x": self.current_x,
+                    "y": self.current_y,
+                    "theta": self.current_heading
+                }
+                
+                # Update GUI elements
+                dpg.set_value("odom_x", f"X: {self.current_x:.3f} m")
+                dpg.set_value("odom_y", f"Y: {self.current_y:.3f} m")
+                dpg.set_value("odom_theta", f"θ: {math.degrees(self.current_heading):.1f}°")
+                
+                # Update plot
+                if len(self.odom_path_x) > 1:
+                    dpg.set_value("odom_path_series", 
+                                [list(self.odom_path_x), list(self.odom_path_y)])
+                    # Auto-fit axes to data
+                    dpg.fit_axis_data("odom_x_axis")
+                    dpg.fit_axis_data("odom_y_axis")
+                    
+        except Exception as e:
+            print(f"Error processing odometry message: {e}")
+
+    def disconnect_mqtt(self):
+        """Disconnect from MQTT"""
+        if self.mqtt_client:
+            self.mqtt_client.loop_stop()
+            self.mqtt_client.disconnect()
+            self.mqtt_connected = False
+
+
     def setup_camera_texture(self):
         """Initialize camera texture"""
         
@@ -574,6 +668,13 @@ class RobotSSHGUI:
         dpg.fit_axis_data("mem_x_axis")
         dpg.fit_axis_data("mem_y_axis")
     
+    def reset_odom_path(self):
+        """Clear odometry path history"""
+        self.odom_path_x.clear()
+        self.odom_path_y.clear()
+        dpg.set_value("odom_path_series", [[], []])
+        self.log_command("Odometry path cleared")
+
     def create_gui(self):
         """Create the GUI layout"""
         dpg.create_context()
@@ -773,6 +874,32 @@ class RobotSSHGUI:
                                                                   label="Memory", parent="mem_y_axis")
                     
                     dpg.add_separator()
+
+                    # Odometry visualization
+                    dpg.add_text("Robot Odometry", color=(100, 200, 255))
+                    dpg.add_separator()
+                     
+                    # Current position display
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("X: 0.000 m", tag="odom_x", color=(100, 255, 100))
+                        dpg.add_spacer(width=20)
+                        dpg.add_text("Y: 0.000 m", tag="odom_y", color=(100, 255, 100))
+                        dpg.add_spacer(width=20)
+                        dpg.add_text("θ: 0.0°", tag="odom_theta", color=(100, 255, 100))
+                     
+                    # Path plot
+                    with dpg.plot(label="Robot Path (Top-Down View)", height=300, width=-1, equal_aspects=True):
+                        dpg.add_plot_legend()
+                        x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="X (meters)", tag="odom_x_axis")
+                        y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Y (meters)", tag="odom_y_axis")
+                        
+                        # Path line
+                        dpg.add_line_series([], [], label="Path", parent=y_axis, tag="odom_path_series")
+                                             
+                    # Reset odometry button
+                    dpg.add_button(label="Reset Odometry Path", 
+                                  callback=lambda: self.reset_odom_path(),
+                                  width=-1)
 
                 # Right panel - Command log and file browser
                 with dpg.child_window(width=-1, height=-1):
