@@ -521,6 +521,34 @@ class RobotSSHGUI:
         except Exception as e:
             print(f"Error stopping service: {e}")
 
+    def start_motor_control_service(self):
+        """Start Motor Control service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl start motor_control.service")
+            if stderr:
+                print(f"Start service error: {stderr}")
+            else:
+                print("Motor Control service started")
+        except Exception as e:
+            print(f"Error starting service: {e}")
+
+    def stop_motor_control_service(self):
+        """Stop motor control service"""
+        if not self.connected:
+            return
+        
+        try:
+            stdout, stderr = self.execute_command("sudo systemctl stop motor_control.service")
+            if stderr:
+                print(f"Stop service error: {stderr}")
+            else:
+                print("Motor Control service stopped")
+        except Exception as e:
+            print(f"Error stopping service: {e}")
+
     def start_display_scan(self):
         """Start Display Scan Program locally (not on robot)"""
         try:
@@ -830,6 +858,14 @@ class RobotSSHGUI:
 
                     dpg.add_button(label="Stop Odometer Service",
                                    callback=lambda: self.stop_odometer_service(),
+                                   width=-1)
+
+                    dpg.add_button(label="Start MotorControl Service",
+                                   callback=lambda: self.start_motor_control_service(),
+                                   width=-1)
+
+                    dpg.add_button(label="Stop Notor Control Service",
+                                   callback=lambda: self.stop_motor_control_service(),
                                    width=-1)
 
                     dpg.add_button(label="Start Display Scan",
