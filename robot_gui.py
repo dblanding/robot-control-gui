@@ -1,5 +1,5 @@
 # robot_gui.py
-# Run this on you laptop
+# Run this on your laptop
 import dearpygui.dearpygui as dpg
 import paramiko
 import subprocess
@@ -79,6 +79,21 @@ class RobotSSHGUI:
         # MQTT client for odometry subscription (separate from SSH)
         self.mqtt_client = None
         self.mqtt_connected = False
+        
+        # MQTT message display buffers (for 3 topics)
+        self.mqtt_messages = {
+            "topic1": deque(maxlen=20),
+            "topic2": deque(maxlen=20),
+            "topic3": deque(maxlen=20)
+        }
+        
+        # Define the 3 MQTT topics you want to display
+        # Modify these to match your actual topics
+        self.display_topics = [
+            Topics.MOTOR_CMD,   # Example topic 1
+            Topics.ODOM_POSE,   # Example topic 2
+            Topics.LIDAR_SCAN   # Example topic 3
+        ]
 
     def setup_ssh_connection(self):
         """Establish SSH connection"""
@@ -151,7 +166,7 @@ class RobotSSHGUI:
             dpg.configure_item("connection_status", color=(255, 0, 0))
     
     def setup_mqtt_subscriber(self):
-        """Connect to MQTT broker on robot to subscribe to odometry"""
+        """Connect to MQTT broker on robot to subscribe to odometry and display topics"""
         try:
             self.mqtt_client = mqtt.Client()
             self.mqtt_client.username_pw_set("robot", "robot")
@@ -163,7 +178,7 @@ class RobotSSHGUI:
             self.mqtt_client.loop_start()
             
             self.mqtt_connected = True
-            self.log_command("✓ Connected to MQTT broker for odometry")
+            self.log_command("✓ Connected to MQTT broker")
             
         except Exception as e:
             self.log_command(f"✗ MQTT connection failed: {e}")
@@ -172,9 +187,12 @@ class RobotSSHGUI:
     def on_mqtt_connect(self, client, userdata, flags, rc):
         """Callback when MQTT connects"""
         if rc == 0:
-            # Subscribe to odometry topic
-            client.subscribe(Topics.ODOM_POSE)
-            self.log_command(f"✓ Subscribed to {Topics.ODOM_POSE}")
+            # Subscribe to all display topics
+            for topic in self.display_topics:
+                client.subscribe(topic)
+                self.log_command(f"✓ Subscribed to {topic}")
+                
+            self.log_command("✓ All MQTT subscriptions active")
         else:
             self.log_command(f"✗ MQTT connection failed with code {rc}")
 
@@ -182,40 +200,43 @@ class RobotSSHGUI:
         """Callback when MQTT message received"""
         try:
             import json
-            if msg.topic == Topics.ODOM_POSE:
-                data = json.loads(msg.payload.decode())
+            
+            # Handle display topics
+            if msg.topic in self.display_topics:
+                timestamp = time.strftime("%H:%M:%S")
+                payload_str = msg.payload.decode()
                 
-                # Update current position
-                self.current_x = data['x']
-                self.current_y = data['y']
-                self.current_heading = data['h']
+                # Try to pretty-print JSON, otherwise show raw
+                try:
+                    payload_obj = json.loads(payload_str)
+                    payload_display = json.dumps(payload_obj, indent=2)
+                except:
+                    payload_display = payload_str
                 
-                # Add to path history
-                self.odom_path_x.append(self.current_x)
-                self.odom_path_y.append(self.current_y)
+                message_entry = f"[{timestamp}] {msg.topic}\n{payload_display}\n"
                 
-                # Update robot status dict
-                self.robot_status["position"] = {
-                    "x": self.current_x,
-                    "y": self.current_y,
-                    "theta": self.current_heading
-                }
+                # Add to appropriate buffer based on topic
+                topic_index = self.display_topics.index(msg.topic)
+                topic_key = f"topic{topic_index + 1}"
+                self.mqtt_messages[topic_key].append(message_entry)
                 
-                # Update GUI elements
-                dpg.set_value("odom_x", f"X: {self.current_x:.3f} m")
-                dpg.set_value("odom_y", f"Y: {self.current_y:.3f} m")
-                dpg.set_value("odom_theta", f"θ: {math.degrees(self.current_heading):.1f}°")
-                
-                # Update plot
-                if len(self.odom_path_x) > 1:
-                    dpg.set_value("odom_path_series", 
-                                [list(self.odom_path_x), list(self.odom_path_y)])
-                    # Auto-fit axes to data
-                    dpg.fit_axis_data("odom_x_axis")
-                    dpg.fit_axis_data("odom_y_axis")
+                # Update the corresponding text display (only if GUI is ready)
+                self.update_mqtt_display(topic_key, topic_index)
                     
         except Exception as e:
-            print(f"Error processing odometry message: {e}")
+            print(f"Error processing MQTT message: {e}")
+
+    def update_mqtt_display(self, topic_key, topic_index):
+        """Update MQTT message display in GUI"""
+        try:
+            # Check if the GUI element exists before trying to update it
+            if dpg.does_item_exist(f"mqtt_display_{topic_index}"):
+                messages = list(self.mqtt_messages[topic_key])
+                display_text = "\n".join(messages)
+                dpg.set_value(f"mqtt_display_{topic_index}", display_text)
+        except Exception as e:
+            # Silently ignore if GUI not ready yet
+            pass
 
     def disconnect_mqtt(self):
         """Disconnect from MQTT"""
@@ -223,7 +244,6 @@ class RobotSSHGUI:
             self.mqtt_client.loop_stop()
             self.mqtt_client.disconnect()
             self.mqtt_connected = False
-
 
     def setup_camera_texture(self):
         """Initialize camera texture"""
@@ -346,7 +366,6 @@ class RobotSSHGUI:
     def execute_command(self, command, timeout=10, get_pty=False):
         """Execute SSH command and return output"""
         if not self.connected or not self.ssh_client:
-            # print(f"Command '{command}' failed: Not connected")
             return None, "Not connected"
         
         with self.ssh_lock:
@@ -442,8 +461,6 @@ class RobotSSHGUI:
                         
                         dpg.configure_item("battery_percent_text", color=color)
                         dpg.configure_item("battery_gauge", overlay=f"Battery: {percent:.1f}%")
-                        
-                        # print(f"✓✓✓ Battery fully updated: {percent:.1f}% ({parsed_data.get('voltage', 0):.2f}V)")
                     
                 time.sleep(10)
                 
@@ -647,7 +664,6 @@ class RobotSSHGUI:
     def send_robot_command(self, command_type, **kwargs):
         """Send command to robot control script"""
         # Construct command based on your robot's control interface
-        # This assumes you have a Python script on the Pi that controls the robot
         
         if command_type == "velocity":
             linear = kwargs.get("linear", 0.0)
@@ -681,7 +697,7 @@ class RobotSSHGUI:
         
         # Update log display
         log_text = "\n".join(self.command_log)
-        dpg.set_value("command_log", log_text)
+        # Note: command_log display removed from GUI, but keeping this for potential future use
     
     def update_plots(self):
         """Update telemetry plots"""
@@ -693,7 +709,6 @@ class RobotSSHGUI:
         # Force plot refresh
         dpg.fit_axis_data("cpu_x_axis")
         dpg.fit_axis_data("cpu_y_axis")
-        dpg.fit_axis_data("mem_x_axis")
         dpg.fit_axis_data("mem_y_axis")
     
     def reset_odom_path(self):
@@ -702,6 +717,12 @@ class RobotSSHGUI:
         self.odom_path_y.clear()
         dpg.set_value("odom_path_series", [[], []])
         self.log_command("Odometry path cleared")
+    
+    def clear_mqtt_display(self, topic_index):
+        """Clear MQTT display for a specific topic"""
+        topic_key = f"topic{topic_index + 1}"
+        self.mqtt_messages[topic_key].clear()
+        dpg.set_value(f"mqtt_display_{topic_index}", "")
 
     def create_gui(self):
         """Create the GUI layout"""
@@ -733,12 +754,12 @@ class RobotSSHGUI:
             
             dpg.add_separator()
             
-            # Main content area
+            # Main content area with 3 columns
             with dpg.group(horizontal=True):
 
-                # Left panel - Control
-                with dpg.child_window(width=450, height=-1):  # Use height=-1 on child windows to make them fill available vertical space
-                    dpg.add_text("Robot Control", color=(100, 200, 255))
+                # ========== LEFT PANEL - Battery + System Telemetry ==========
+                with dpg.child_window(width=450, height=-1):
+                    dpg.add_text("Robot Status", color=(100, 200, 255))
                     dpg.add_separator()
                     
                     # Battery Status with Gauge
@@ -746,7 +767,7 @@ class RobotSSHGUI:
                         dpg.add_text("Battery Status", color=(255, 200, 100))
                         dpg.add_separator()
                         
-                        # Battery percentage display (centered) - NO FONT BINDING
+                        # Battery percentage display (centered)
                         with dpg.group(horizontal=True):
                             dpg.add_spacer(width=150)
                             dpg.add_text("---%", tag="battery_percent_text", color=(150, 150, 150))
@@ -774,61 +795,14 @@ class RobotSSHGUI:
                             with dpg.table_row():
                                 dpg.add_text("Power:")
                                 dpg.add_text("0.00 W", tag="battery_power")
-                        
-                    dpg.add_separator()
-                    
-                    # Emergency stop
-                    dpg.add_button(label="EMERGENCY STOP", 
-                                 callback=lambda: self.send_robot_command("emergency_stop"),
-                                 width=-1, height=50)
-                    dpg.add_separator()
-                    
-                    # Velocity control
-                    dpg.add_text("Velocity Control")
-                    dpg.add_slider_float(label="Linear Velocity (m/s)", tag="linear_vel_slider",
-                                       default_value=0.0, min_value=-1.0, max_value=1.0, 
-                                       width=-1)
-                    dpg.add_slider_float(label="Angular Velocity (rad/s)", tag="angular_vel_slider",
-                                       default_value=0.0, min_value=-2.0, max_value=2.0,
-                                       width=-1)
-                    
-                    with dpg.group(horizontal=True):
-                        dpg.add_button(label="Send Velocity", callback=self.on_send_velocity,
-                                     width=210)
-                        dpg.add_button(label="Stop", callback=self.on_stop_robot, width=210)
                     
                     dpg.add_separator()
                     
-                    # Preset movements
-                    dpg.add_text("Preset Commands")
-                    with dpg.group(horizontal=True):
-                        dpg.add_button(label="Forward", 
-                                     callback=lambda: self.send_robot_command("move", direction="forward"),
-                                     width=100)
-                        dpg.add_button(label="Backward", 
-                                     callback=lambda: self.send_robot_command("move", direction="backward"),
-                                     width=100)
-                        dpg.add_button(label="Left", 
-                                     callback=lambda: self.send_robot_command("move", direction="left"),
-                                     width=100)
-                        dpg.add_button(label="Right", 
-                                     callback=lambda: self.send_robot_command("move", direction="right"),
-                                     width=100)
-                    
+                    # System Telemetry (moved from middle panel)
+                    dpg.add_text("System Telemetry", color=(100, 200, 255))
                     dpg.add_separator()
                     
-                    # Custom command
-                    dpg.add_text("Custom SSH Command")
-                    dpg.add_input_text(label="", tag="custom_command", 
-                                     hint="Enter SSH command", width=-1)
-                    dpg.add_button(label="Execute Command", callback=self.on_execute_custom,
-                                 width=-1)
-                    
-                    dpg.add_separator()
-                    
-                    # System status
-                    dpg.add_text("System Status", color=(100, 200, 255))
-                    dpg.add_separator()
+                    # System status text
                     dpg.add_text("CPU Temp: 0.0°C", tag="cpu_temp")
                     dpg.add_text("CPU Usage: 0.0%", tag="cpu_usage")
                     dpg.add_text("Memory: 0.0%", tag="memory_usage")
@@ -836,65 +810,8 @@ class RobotSSHGUI:
                     
                     dpg.add_separator()
                     
-                    # Quick actions
-                    dpg.add_text("Quick Actions", color=(100, 200, 255))
-                    dpg.add_separator()
-
-                    dpg.add_button(label="Restart Scanner Service",
-                                   callback=lambda: self.restart_scanner_service(),
-                                   width=-1)
-
-                    dpg.add_button(label="Start Scan Motor",
-                                   callback=lambda: self.start_scan_motor(),
-                                   width=-1)
-
-                    dpg.add_button(label="Stop Scan Motor",
-                                   callback=lambda: self.stop_scan_motor(),
-                                   width=-1)
-
-                    dpg.add_button(label="Start Odometer Service",
-                                   callback=lambda: self.start_odometer_service(),
-                                   width=-1)
-
-                    dpg.add_button(label="Stop Odometer Service",
-                                   callback=lambda: self.stop_odometer_service(),
-                                   width=-1)
-
-                    dpg.add_button(label="Start MotorControl Service",
-                                   callback=lambda: self.start_motor_control_service(),
-                                   width=-1)
-
-                    dpg.add_button(label="Stop Notor Control Service",
-                                   callback=lambda: self.stop_motor_control_service(),
-                                   width=-1)
-
-                    dpg.add_button(label="Start Display Scan",
-                                   callback=lambda: self.start_display_scan(),
-                                   width=-1)
-
-                    dpg.add_button(label="Stop Display Scan",
-                                   callback=lambda: self.stop_display_scan(),
-                                   width=-1)
-
-                    dpg.add_button(label="List Home Directory", 
-                                 callback=lambda: self.command_queue.put("ls -la ~/"),
-                                 width=-1)
-
-                    dpg.add_button(label="Show Current Directory", 
-                                 callback=lambda: self.command_queue.put("pwd"),
-                                 width=-1)
-
-                    dpg.add_button(label="Reboot Pi", 
-                                 callback=lambda: self.on_reboot_pi(),
-                                 width=-1)
-
-                # Middle panel - Telemetry
-                with dpg.child_window(width=450, height=-1):
-                    dpg.add_text("System Telemetry", color=(100, 200, 255))
-                    dpg.add_separator()
-                    
                     # CPU plot
-                    with dpg.plot(label="CPU Usage", height=250, width=-1):
+                    with dpg.plot(label="CPU Usage", height=200, width=-1):
                         dpg.add_plot_legend()
                         dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="cpu_x_axis")
                         dpg.add_plot_axis(dpg.mvYAxis, label="CPU %", tag="cpu_y_axis")
@@ -902,92 +819,109 @@ class RobotSSHGUI:
                                                                   label="CPU", parent="cpu_y_axis")
                     
                     # Memory plot
-                    with dpg.plot(label="Memory Usage", height=250, width=-1):
+                    with dpg.plot(label="Memory Usage", height=200, width=-1):
                         dpg.add_plot_legend()
                         dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="mem_x_axis")
                         dpg.add_plot_axis(dpg.mvYAxis, label="Memory %", tag="mem_y_axis")
                         self.mem_series_tag = dpg.add_line_series(self.time_points, self.memory_history,
                                                                   label="Memory", parent="mem_y_axis")
-                    
+
+                # ========== MIDDLE PANEL - Quick Actions (narrow) ==========
+                with dpg.child_window(width=280, height=-1):
+                    dpg.add_text("Quick Actions", color=(100, 200, 255))
                     dpg.add_separator()
 
-                    # Odometry visualization
-                    dpg.add_text("Robot Odometry", color=(100, 200, 255))
+                    dpg.add_button(label="Restart Scanner Service",
+                                   callback=lambda: self.restart_scanner_service(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Start Scan Motor",
+                                   callback=lambda: self.start_scan_motor(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Stop Scan Motor",
+                                   callback=lambda: self.stop_scan_motor(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Start Odometer Service",
+                                   callback=lambda: self.start_odometer_service(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Stop Odometer Service",
+                                   callback=lambda: self.stop_odometer_service(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Start MotorControl Service",
+                                   callback=lambda: self.start_motor_control_service(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Stop MotorControl Service",
+                                   callback=lambda: self.stop_motor_control_service(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Start Display Scan",
+                                   callback=lambda: self.start_display_scan(),
+                                   width=-1, height=30)
+
+                    dpg.add_button(label="Stop Display Scan",
+                                   callback=lambda: self.stop_display_scan(),
+                                   width=-1, height=30)
+
                     dpg.add_separator()
-                     
-                    # Current position display
-                    with dpg.group(horizontal=True):
-                        dpg.add_text("X: 0.000 m", tag="odom_x", color=(100, 255, 100))
-                        dpg.add_spacer(width=20)
-                        dpg.add_text("Y: 0.000 m", tag="odom_y", color=(100, 255, 100))
-                        dpg.add_spacer(width=20)
-                        dpg.add_text("θ: 0.0°", tag="odom_theta", color=(100, 255, 100))
-                     
-                    # Path plot
-                    with dpg.plot(label="Robot Path (Top-Down View)", height=300, width=-1, equal_aspects=True):
-                        dpg.add_plot_legend()
-                        x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="X (meters)", tag="odom_x_axis")
-                        y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Y (meters)", tag="odom_y_axis")
-                        
-                        # Path line
-                        dpg.add_line_series([], [], label="Path", parent=y_axis, tag="odom_path_series")
-                                             
+
+                    dpg.add_button(label="List Home Directory", 
+                                 callback=lambda: self.command_queue.put("ls -la ~/"),
+                                 width=-1, height=30)
+
+                    dpg.add_button(label="Show Current Directory", 
+                                 callback=lambda: self.command_queue.put("pwd"),
+                                 width=-1, height=30)
+
+                    dpg.add_button(label="Reboot Pi", 
+                                 callback=lambda: self.on_reboot_pi(),
+                                 width=-1, height=30)
+                    
+                    dpg.add_separator()
+                    
                     # Reset odometry button
                     dpg.add_button(label="Reset Odometry Path", 
                                   callback=lambda: self.reset_odom_path(),
-                                  width=-1)
+                                  width=-1, height=30)
 
-                # Right panel - Command log and file browser
+                # ========== RIGHT PANEL - MQTT Display + Camera ==========
                 with dpg.child_window(width=-1, height=-1):
-                    dpg.add_text("Command Log & Output", color=(100, 200, 255))
+                    
+                    # MQTT Message Display Section
+                    dpg.add_text("MQTT Message Monitor", color=(100, 200, 255))
                     dpg.add_separator()
                     
-                    # Command log
-                    dpg.add_input_text(tag="command_log", multiline=True, 
-                                     readonly=True, height=300, width=-1,
-                                     default_value="Waiting for connection...")
-                    
-                    with dpg.group(horizontal=True):
-                        dpg.add_button(label="Clear Log", callback=self.on_clear_log, width=150)
-                        dpg.add_button(label="Save Log", callback=self.on_save_log, width=150)
-                    
-                    dpg.add_separator()
-                    
-                    # File operations
-                    dpg.add_text("File Operations", color=(100, 200, 255))
-                    dpg.add_separator()
-                    
-                    dpg.add_input_text(label="Remote Path", tag="remote_path",
-                                     default_value="/home/doug/", width=-1)
-                    
-                    with dpg.group(horizontal=True):
-                        dpg.add_button(label="List Files", callback=self.on_list_files, width=150)
-                        dpg.add_button(label="Upload File", callback=self.on_upload_file, width=150)
-                        dpg.add_button(label="Download File", callback=self.on_download_file, width=150)
-                    
-                    dpg.add_separator()
-                    
-                    # File list
-                    dpg.add_text("File Browser")
-                    dpg.add_listbox([], tag="file_list", width=-1, num_items=10)
+                    # Create 3 collapsible sections for the 3 topics
+                    for i, topic in enumerate(self.display_topics):
+                        with dpg.collapsing_header(label=f"Topic: {topic}", default_open=(i==0)):
+                            
+                            # Display area for messages
+                            dpg.add_input_text(
+                                tag=f"mqtt_display_{i}",
+                                multiline=True,
+                                readonly=True,
+                                height=100,
+                                width=-1,
+                                default_value=f"Waiting for messages on {topic}..."
+                            )
+                            
+                            # Clear button for this topic
+                            dpg.add_button(
+                                label=f"Clear {topic.split('/')[-1]}",
+                                callback=lambda s, a, i=i: self.clear_mqtt_display(i),
+                                width=150
+                            )
                     
                     dpg.add_separator()
                     
-                    # Process management
-                    dpg.add_text("Process Management", color=(100, 200, 255))
-                    dpg.add_separator()
-                    
-                    with dpg.group(horizontal=True):
-                        dpg.add_button(label="List Processes", 
-                                     callback=lambda: self.command_queue.put("ps aux | grep python"),
-                                     width=150)
-                        dpg.add_button(label="Kill Process", callback=self.on_kill_process, width=150)
-                    
-                    dpg.add_input_text(label="PID", tag="process_pid", width=150)
-
-                    # Camera Feed
+                    # Camera Feed Section
                     with dpg.group():
                         dpg.add_text("Camera Feed", color=(100, 200, 255))
+                        dpg.add_separator()
                         
                         # Camera controls
                         with dpg.group(horizontal=True):
@@ -1000,7 +934,7 @@ class RobotSSHGUI:
                         # Camera image
                         dpg.add_image("camera_texture", width=640, height=480)
 
-        # File dialogs
+        # File dialogs (kept for potential future use)
         with dpg.file_dialog(directory_selector=False, show=False, 
                            callback=self.upload_file_callback, tag="upload_dialog",
                            width=700, height=400):
@@ -1040,7 +974,7 @@ class RobotSSHGUI:
         self.username = dpg.get_value("ssh_username")
         self.password = dpg.get_value("ssh_password")
         self.use_key = dpg.get_value("use_key")
-        self.key_path = os.path.expanduser(dpg.get_value("key_path"))  # Expand ~ to home directory
+        self.key_path = os.path.expanduser(dpg.get_value("key_path"))
         
         # Validate inputs
         if not self.host:
@@ -1060,8 +994,8 @@ class RobotSSHGUI:
         threading.Thread(target=self.setup_ssh_connection, daemon=True).start()
 
     def on_disconnect_button(self):
-            """Handle disconnect button click"""
-            self.disconnect_ssh()
+        """Handle disconnect button click"""
+        self.disconnect_ssh()
     
     def on_send_velocity(self):
         """Handle send velocity button click"""
@@ -1085,7 +1019,6 @@ class RobotSSHGUI:
     def on_clear_log(self):
         """Clear command log"""
         self.command_log.clear()
-        dpg.set_value("command_log", "")
     
     def on_save_log(self):
         """Save command log to file"""
@@ -1104,12 +1037,12 @@ class RobotSSHGUI:
         command = f"ls -lah {remote_path}"
         self.command_queue.put(command)
         
-    # Also get file list for listbox
-    def get_files():
-        output, _ = self.execute_command(f"ls {remote_path}")
-        if output:
-            files = output.split('\n')
-            dpg.configure_item("file_list", items=files)
+        # Also get file list for listbox
+        def get_files():
+            output, _ = self.execute_command(f"ls {remote_path}")
+            if output:
+                files = output.split('\n')
+                dpg.configure_item("file_list", items=files)
         
         threading.Thread(target=get_files, daemon=True).start()
     
@@ -1126,16 +1059,16 @@ class RobotSSHGUI:
         local_path = app_data['file_path_name']
         remote_path = dpg.get_value("remote_path")
         
-    def upload():
-        try:
-            sftp = self.ssh_client.open_sftp()
-            remote_file = remote_path + "/" + local_path.split('/')[-1]
-            sftp.put(local_path, remote_file)
-            sftp.close()
-            self.log_command(f"Uploaded {local_path} to {remote_file}")
-        except Exception as e:
-            self.log_command(f"Upload failed: {e}")
-    
+        def upload():
+            try:
+                sftp = self.ssh_client.open_sftp()
+                remote_file = remote_path + "/" + local_path.split('/')[-1]
+                sftp.put(local_path, remote_file)
+                sftp.close()
+                self.log_command(f"Uploaded {local_path} to {remote_file}")
+            except Exception as e:
+                self.log_command(f"Upload failed: {e}")
+        
         threading.Thread(target=upload, daemon=True).start()
     
     def download_file_callback(self, sender, app_data):
@@ -1151,14 +1084,14 @@ class RobotSSHGUI:
         remote_path = dpg.get_value("remote_path")
         remote_file = remote_path + "/" + selected_files
         
-    def download():
-        try:
-            sftp = self.ssh_client.open_sftp()
-            sftp.get(remote_file, local_path)
-            sftp.close()
-            self.log_command(f"Downloaded {remote_file} to {local_path}")
-        except Exception as e:
-            self.log_command(f"Download failed: {e}")
+        def download():
+            try:
+                sftp = self.ssh_client.open_sftp()
+                sftp.get(remote_file, local_path)
+                sftp.close()
+                self.log_command(f"Downloaded {remote_file} to {local_path}")
+            except Exception as e:
+                self.log_command(f"Download failed: {e}")
         
         threading.Thread(target=download, daemon=True).start()
     
