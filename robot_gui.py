@@ -95,6 +95,13 @@ class RobotSSHGUI:
             Topics.LIDAR_SCAN   # Example topic 3
         ]
 
+        # Per-topic enable flags — start with lidar disabled to reduce broker load
+        self.topic_enabled = {
+            Topics.MOTOR_CMD:  True,
+            Topics.ODOM_POSE:  True,
+            Topics.LIDAR_SCAN: False,   # high-rate; enable only when needed
+        }
+
     def setup_ssh_connection(self):
         """Establish SSH connection"""
         try:
@@ -185,16 +192,29 @@ class RobotSSHGUI:
             self.mqtt_connected = False
 
     def on_mqtt_connect(self, client, userdata, flags, rc):
-        """Callback when MQTT connects"""
+        """Callback when MQTT connects — only subscribe to enabled topics"""
         if rc == 0:
-            # Subscribe to all display topics
             for topic in self.display_topics:
-                client.subscribe(topic)
-                self.log_command(f"✓ Subscribed to {topic}")
-                
-            self.log_command("✓ All MQTT subscriptions active")
+                if self.topic_enabled.get(topic, True):
+                    client.subscribe(topic)
+                    self.log_command(f"✓ Subscribed to {topic}")
+                else:
+                    self.log_command(f"○ Monitoring disabled for {topic}")
+            self.log_command("✓ MQTT subscriptions active")
         else:
             self.log_command(f"✗ MQTT connection failed with code {rc}")
+
+    def toggle_topic(self, sender, app_data, topic):
+        """Enable or disable monitoring for a single topic."""
+        enabled = dpg.get_value(sender)
+        self.topic_enabled[topic] = enabled
+        if self.mqtt_client and self.mqtt_connected:
+            if enabled:
+                self.mqtt_client.subscribe(topic)
+                self.log_command(f"✓ Subscribed to {topic}")
+            else:
+                self.mqtt_client.unsubscribe(topic)
+                self.log_command(f"○ Unsubscribed from {topic}")
 
     def on_mqtt_message(self, client, userdata, msg):
         """Callback when MQTT message received"""
@@ -897,24 +917,37 @@ class RobotSSHGUI:
                     
                     # Create 3 collapsible sections for the 3 topics
                     for i, topic in enumerate(self.display_topics):
-                        with dpg.collapsing_header(label=f"Topic: {topic}", default_open=(i==0)):
-                            
-                            # Display area for messages
-                            dpg.add_input_text(
-                                tag=f"mqtt_display_{i}",
-                                multiline=True,
-                                readonly=True,
-                                height=100,
-                                width=-1,
-                                default_value=f"Waiting for messages on {topic}..."
+                        # Row: checkbox + collapsing header side by side
+                        with dpg.group(horizontal=True):
+                            dpg.add_checkbox(
+                                label="",
+                                tag=f"mqtt_enable_{i}",
+                                default_value=self.topic_enabled.get(topic, True),
+                                callback=self.toggle_topic,
+                                user_data=topic,
                             )
-                            
-                            # Clear button for this topic
-                            dpg.add_button(
-                                label=f"Clear {topic.split('/')[-1]}",
-                                callback=lambda s, a, i=i: self.clear_mqtt_display(i),
-                                width=150
-                            )
+                            with dpg.collapsing_header(label=f"Topic: {topic}", default_open=(i==0)):
+
+                                # Display area for messages
+                                dpg.add_input_text(
+                                    tag=f"mqtt_display_{i}",
+                                    multiline=True,
+                                    readonly=True,
+                                    height=100,
+                                    width=-1,
+                                    default_value=(
+                                        f"Waiting for messages on {topic}..."
+                                        if self.topic_enabled.get(topic, True)
+                                        else f"Monitoring disabled. Check box to enable."
+                                    )
+                                )
+
+                                # Clear button for this topic
+                                dpg.add_button(
+                                    label=f"Clear {topic.split('/')[-1]}",
+                                    callback=lambda s, a, i=i: self.clear_mqtt_display(i),
+                                    width=150
+                                )
                     
                     dpg.add_separator()
                     
